@@ -1,0 +1,708 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>鋁條材料計算器</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, collection, query, onSnapshot, addDoc, updateDoc, deleteDoc, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        const firebaseConfig = window.__firebase_config ? JSON.parse(window.__firebase_config) : {
+            apiKey: "",
+            authDomain: "default-app-id.firebaseapp.com",
+            projectId: "default-app-id",
+            storageBucket: "default-app-id.appspot.com",
+            messagingSenderId: "000000000000",
+            appId: "1:000000000000:web:000000000000"
+        };
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'solar-calc-default';
+        
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        window.db = db;
+        window.auth = auth;
+        window.appId = appId;
+        window.firestoreUtils = { doc, setDoc, getDoc, collection, query, onSnapshot, addDoc, updateDoc, deleteDoc, getDocs };
+
+        const initAuth = async () => {
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (err) { console.error("Auth failed", err); }
+        };
+        initAuth();
+
+        onAuthStateChanged(auth, (user) => {
+            window.currentUser = user;
+            if (user) {
+                const statusEl = document.getElementById('cloudStatus');
+                if (statusEl) {
+                    statusEl.textContent = "雲端已連線";
+                    statusEl.classList.replace('text-gray-400', 'text-green-500');
+                }
+            }
+        });
+    </script>
+
+    <style>
+        @media print {
+            .no-print { display: none; }
+            body { background: white; padding: 0; }
+            .print-border { border: 1px solid #e5e7eb; }
+            .container { max-width: 100%; width: 100%; }
+        }
+        input::-webkit-outer-spin-button, input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+        .tab-active { border-bottom: 4px solid #1e40af; color: #1e40af; font-weight: 800; }
+        .modal-open { overflow: hidden; }
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen font-sans text-gray-900 text-sm md:text-base">
+
+    <div class="max-w-[1400px] mx-auto px-4 py-8 container">
+        <!-- Header -->
+        <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
+            <div class="flex items-center gap-3">
+                <h1 class="text-2xl md:text-3xl font-bold text-blue-800">太陽能工程材料計算系統</h1>
+                <div id="cloudStatus" class="text-[10px] bg-white border px-2 py-1 rounded-full text-gray-400 font-bold uppercase tracking-widest shadow-sm">連線中...</div>
+            </div>
+            <div class="flex gap-2 no-print">
+                <button onclick="toggleCloudModal()" class="bg-blue-800 text-white px-4 py-2 rounded-lg shadow-md hover:bg-blue-900 transition flex items-center gap-2 font-bold text-sm">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z"></path></svg>
+                    雲端專案
+                </button>
+                <button onclick="window.print()" class="bg-white border border-gray-300 px-4 py-2 rounded-lg shadow-sm hover:bg-gray-50 transition flex items-center gap-2 font-medium text-sm">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"></path></svg>
+                    PDF
+                </button>
+                <button onclick="resetData()" class="bg-red-50 text-red-600 border border-red-100 px-4 py-2 rounded-lg shadow-sm hover:bg-red-100 transition font-medium text-sm">重置</button>
+            </div>
+        </div>
+
+        <!-- Tab Navigation -->
+        <div class="flex border-b border-gray-200 mb-6 no-print overflow-x-auto">
+            <button onclick="switchTab('rails')" id="tab-rails" class="px-6 py-3 text-gray-500 hover:text-blue-600 transition tab-active whitespace-nowrap">鋁條材料計算</button>
+            <button onclick="switchTab('walkway')" id="tab-walkway" class="px-6 py-3 text-gray-500 hover:text-blue-600 transition whitespace-nowrap">維修走道計算</button>
+            <button onclick="switchTab('summary')" id="tab-summary" class="px-6 py-3 text-gray-500 hover:text-blue-600 transition whitespace-nowrap flex items-center gap-2 font-bold">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                工程材料總表
+            </button>
+        </div>
+
+        <!-- Project Info -->
+        <div id="projectInfoArea" class="bg-white rounded-xl shadow-sm p-6 mb-6 border border-gray-100 text-sm">
+            <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-4">
+                <div>
+                    <label class="block font-medium text-gray-700 mb-1 text-[11px] uppercase tracking-wider">案場名稱</label>
+                    <input type="text" id="projectName" placeholder="案場名稱..." class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none font-bold">
+                </div>
+                <div>
+                    <label class="block font-medium text-gray-700 mb-1 text-[11px] uppercase tracking-wider">分棟名稱</label>
+                    <input type="text" id="buildingName" placeholder="分棟名稱..." class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none">
+                </div>
+                <div>
+                    <label class="block font-medium text-gray-700 mb-1 text-[11px] uppercase tracking-wider">專案編碼</label>
+                    <input type="text" id="projectCode" placeholder="編碼..." class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none font-mono">
+                </div>
+                <div class="bg-orange-50 p-2 rounded-lg border border-orange-100">
+                    <label class="block font-bold text-orange-800 mb-1 text-xs">支撐架鎖點</label>
+                    <select id="supportPoints" onchange="recalculateAll()" class="w-full px-3 py-2 border border-orange-200 rounded-lg focus:ring-2 focus:ring-orange-500 outline-none bg-white font-bold text-orange-700 text-sm">
+                        <option value="4" selected>4 鎖點 (*2)</option>
+                        <option value="6">6 鎖點 (*3)</option>
+                    </select>
+                </div>
+                <div class="bg-blue-50/50 p-2 rounded-lg border border-blue-100 font-bold text-center">
+                    <label class="block text-blue-800 mb-1 text-xs">C鋼間距 (mm)</label>
+                    <input type="number" id="cSteelSpacing" value="1000" oninput="recalculateAll()" class="w-full px-3 py-2 border border-blue-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white font-mono text-center">
+                </div>
+                <div class="bg-green-50 p-2 rounded-lg border border-green-100 font-bold text-center">
+                    <label class="block text-green-800 mb-1 text-xs">H座規格</label>
+                    <select id="hBaseSpec" onchange="handleHBaseChange()" class="w-full px-3 py-2 border border-green-200 rounded-lg focus:ring-2 focus:ring-green-500 outline-none bg-white text-green-700 text-center">
+                        <option value="WT-C218">WT-C218</option>
+                        <option value="WT-C175">WT-C175</option>
+                        <option value="WT-B975">WT-B975</option>
+                        <option value="WT-D337">WT-D337</option>
+                    </select>
+                </div>
+                <div class="bg-green-50 p-2 rounded-lg border border-green-100 font-bold text-center">
+                    <label class="block text-green-800 mb-1 text-xs">架高片規格</label>
+                    <select id="pieceSpec" onchange="recalculateAll()" class="w-full px-3 py-2 border border-green-200 rounded-lg focus:ring-2 focus:ring-green-500 outline-none bg-white text-green-700 text-center text-sm">
+                        <option value="170架高片">170架高片</option>
+                        <option value="不需架高片">不需架高片</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Content -->
+        <div id="section-rails" class="tab-content">
+            <div class="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-100 mb-6 font-medium text-center">
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left border-collapse text-sm">
+                        <thead class="bg-gray-50 border-b border-gray-100 text-xs uppercase text-gray-500 text-center font-bold">
+                            <tr>
+                                <th class="px-4 py-3 text-left">模組排數</th>
+                                <th class="px-4 py-3">組數</th>
+                                <th class="px-4 py-3">鋁條長度 (mm)</th>
+                                <th class="px-4 py-3">鋁條數量</th>
+                                <th class="px-4 py-3 border-l border-gray-100">中壓</th>
+                                <th class="px-4 py-3">邊壓</th>
+                                <th class="px-4 py-3 font-bold text-blue-600 border-l border-gray-200 text-center text-xs">H座</th>
+                                <th class="px-4 py-3 font-bold text-blue-600 text-center text-xs">30CM 架高</th>
+                                <th class="px-4 py-3 font-bold text-blue-600 text-center text-xs">架高片</th>
+                                <th class="px-4 py-3 no-print">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="calcBody"></tbody>
+                    </table>
+                </div>
+                <div class="p-4 bg-gray-50/50 border-t border-gray-100 no-print text-left">
+                    <button onclick="addRow()" class="flex items-center text-blue-600 font-bold hover:text-blue-700 transition text-sm">
+                        <svg class="w-5 h-5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path></svg>
+                        新增鋁條配置
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div id="section-walkway" class="tab-content hidden text-center">
+            <div class="grid grid-cols-1 gap-6 font-medium">
+                <div class="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-100 text-sm text-center">
+                    <div class="p-4 bg-blue-50 border-b border-blue-100 flex justify-between items-center text-left">
+                        <h3 class="font-bold text-blue-800 text-sm md:text-base">母索系統計算</h3>
+                        <span class="text-[10px] text-blue-600 bg-white px-2 py-1 rounded border border-blue-200 uppercase font-bold">地牛:1/走道 | 吊帽:1/3M | 鋼索夾:8+吊帽數</span>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left border-collapse">
+                            <thead class="bg-gray-50 border-b border-gray-100 text-xs uppercase text-gray-500 text-center font-bold font-bold">
+                                <tr>
+                                    <th class="px-4 py-2 text-left">維修走道長度 (CM)</th>
+                                    <th class="px-4 py-2 text-center">型式</th>
+                                    <th class="px-4 py-2 text-center">母索長度 (M)</th>
+                                    <th class="px-4 py-2 text-center text-blue-700">地牛</th>
+                                    <th class="px-4 py-2 text-center text-blue-700">鋼索夾</th>
+                                    <th class="px-4 py-2 text-center text-blue-700 font-bold text-blue-800">吊帽</th>
+                                    <th class="px-4 py-2 no-print text-center">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="lifelineBody"></tbody>
+                        </table>
+                    </div>
+                    <div class="p-3 bg-gray-50/30 no-print text-left">
+                        <button onclick="addLifelinePair()" class="text-xs md:text-sm text-blue-600 font-bold hover:underline transition-all flex items-center gap-1">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path></svg>
+                            新增維修走道區段 (同步連動)
+                        </button>
+                    </div>
+                </div>
+
+                <div class="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-100 mb-6 text-sm font-medium">
+                    <div class="p-4 bg-green-50 border-b border-green-100 flex justify-between items-center text-left font-bold">
+                        <h3 class="font-bold text-green-800 text-sm md:text-base">維修走道結構計算</h3>
+                    </div>
+                    <div class="overflow-x-auto text-center">
+                        <table class="w-full text-left border-collapse font-medium">
+                            <thead class="bg-gray-50 border-b border-gray-100 text-xs uppercase text-gray-500 text-center font-bold font-bold">
+                                <tr>
+                                    <th class="px-4 py-2 text-left">位置描述</th>
+                                    <th class="px-4 py-2">距離 (CM)</th>
+                                    <th class="px-4 py-2">型式</th>
+                                    <th class="px-4 py-2 font-bold text-green-800 text-center">H座</th>
+                                    <th class="px-4 py-2 font-bold text-green-700 text-center">菱形網</th>
+                                    <th class="px-4 py-2 font-bold text-blue-700 text-center">角鐵</th>
+                                    <th class="px-4 py-2 font-bold text-orange-700 text-center">型鋼華司</th>
+                                    <th class="px-4 py-2 no-print">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="walkwayStructureBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Master Summary Section -->
+        <div id="section-summary" class="tab-content hidden">
+            <div class="bg-white rounded-2xl shadow-md border border-blue-100 overflow-hidden mb-8">
+                <div class="p-6 bg-gradient-to-r from-blue-800 to-blue-600 text-white flex justify-between items-center">
+                    <div>
+                        <h2 class="text-2xl font-black">工程材料彙整總表</h2>
+                        <p class="text-blue-100 text-xs mt-1 font-bold">集結鋁條與維修走道之全場零件需求</p>
+                    </div>
+                    <div class="text-right">
+                        <div id="summaryProjectName" class="text-lg font-bold"></div>
+                        <div id="summaryProjectCode" class="text-xs opacity-75 font-mono"></div>
+                    </div>
+                </div>
+                
+                <div class="p-8 grid grid-cols-1 lg:grid-cols-2 gap-12">
+                    <div>
+                        <div class="flex items-center gap-2 mb-6 border-b-2 border-blue-50 pb-2">
+                            <div class="w-8 h-8 bg-blue-100 text-blue-600 rounded-lg flex items-center justify-center font-bold">材</div>
+                            <h3 class="text-xl font-extrabold text-blue-900">主要鋁件與板材</h3>
+                        </div>
+                        <div id="masterMainGrid" class="space-y-1"></div>
+                    </div>
+                    <div>
+                        <div class="flex items-center gap-2 mb-6 border-b-2 border-orange-50 pb-2">
+                            <div class="w-8 h-8 bg-orange-100 text-orange-600 rounded-lg flex items-center justify-center font-bold">件</div>
+                            <h3 class="text-xl font-extrabold text-orange-900">螺絲、母索與固定配件</h3>
+                        </div>
+                        <div id="masterHardwareGrid" class="space-y-1"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab-Specific Footers -->
+        <div id="tabSpecificSummary" class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div class="bg-white rounded-xl shadow-sm p-6 border border-gray-100 h-fit">
+                <h2 class="text-lg md:text-xl font-bold mb-4 text-gray-800 flex items-center gap-2 border-b pb-4">
+                    <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path></svg>
+                    <span id="summaryTabLabelName">分頁</span>主要材料彙整
+                </h2>
+                <div class="flex flex-col gap-1 font-medium" id="mainSummaryGrid"></div>
+            </div>
+            <div class="bg-white rounded-xl shadow-sm p-6 border border-gray-100 h-fit">
+                <h2 class="text-lg md:text-xl font-bold mb-4 text-gray-800 flex items-center gap-2 border-b pb-4">
+                    <svg class="w-6 h-6 text-orange-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path></svg>
+                    <span id="summaryTabLabelScrew">分頁</span>配件與螺絲彙整
+                </h2>
+                <div class="flex flex-col gap-1 font-medium" id="screwSummaryGrid"></div>
+            </div>
+        </div>
+
+        <div class="mt-6 bg-white rounded-xl shadow-sm p-6 border border-gray-100 no-print text-xs font-medium">
+            <label class="block font-bold text-gray-700 mb-2">案場備註：</label>
+            <textarea id="projectNote" class="w-full bg-gray-50 border border-gray-200 rounded-lg p-4 focus:ring-2 focus:ring-blue-500 outline-none min-h-[80px]" placeholder="在此輸入案場特殊狀況或備註事項..."></textarea>
+        </div>
+    </div>
+
+    <!-- Cloud Modal -->
+    <div id="cloudModal" class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 hidden no-print">
+        <div class="bg-white w-[90%] max-w-2xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[80vh]">
+            <div class="p-6 bg-blue-800 text-white flex justify-between items-center font-bold">
+                <h3 class="text-xl font-black">雲端專案管理</h3>
+                <button onclick="toggleCloudModal()" class="text-white hover:text-blue-200"><svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"></path></svg></button>
+            </div>
+            <div class="p-6 border-b bg-gray-50 flex gap-2">
+                <input type="text" id="saveNameInput" placeholder="輸入專案名稱..." class="flex-1 px-4 py-2 border rounded-lg outline-none font-bold">
+                <button onclick="saveProjectToCloud()" class="bg-blue-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-blue-700">儲存</button>
+            </div>
+            <div class="p-6 overflow-y-auto flex-1 custom-scrollbar" id="cloudProjectList"></div>
+        </div>
+    </div>
+
+    <script>
+        const railLengthMap = { 1: 1300, 2: 2200, 3: 3300, 4: 4300, 5: 5300, 6: 6300 };
+        let activeTab = 'rails';
+
+        function switchTab(tab) {
+            activeTab = tab;
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.add('hidden'));
+            document.getElementById(`section-${tab}`).classList.remove('hidden');
+            document.getElementById('tab-rails').classList.toggle('tab-active', tab === 'rails');
+            document.getElementById('tab-walkway').classList.toggle('tab-active', tab === 'walkway');
+            document.getElementById('tab-summary').classList.toggle('tab-active', tab === 'summary');
+            document.getElementById('tabSpecificSummary').classList.toggle('hidden', tab === 'summary');
+            document.getElementById('summaryTabLabelName').textContent = tab === 'rails' ? '鋁條' : '走道';
+            document.getElementById('summaryTabLabelScrew').textContent = tab === 'rails' ? '鋁條' : '走道';
+            updateSummary();
+        }
+
+        function handleHBaseChange() {
+            const hBaseSpec = document.getElementById('hBaseSpec').value;
+            document.getElementById('pieceSpec').value = (hBaseSpec === 'WT-D337') ? '不需架高片' : '170架高片';
+            recalculateAll();
+        }
+
+        // --- Core Table Handlers ---
+        function addRow(rows = 1, groups = 1, length = null) {
+            const tbody = document.getElementById('calcBody');
+            const tr = document.createElement('tr');
+            tr.className = "border-b border-gray-50 hover:bg-gray-50/50 transition-colors text-sm font-bold text-center";
+            tr.innerHTML = `
+                <td class="px-4 py-3 text-left"><input type="number" value="${rows}" min="1" oninput="handleRailRowChange(this)" class="row-input w-16 px-2 py-1 border rounded text-center"></td>
+                <td class="px-4 py-3"><input type="number" value="${groups}" min="1" oninput="calculateRailRow(this)" class="group-input w-16 px-2 py-1 border rounded text-center"></td>
+                <td class="px-4 py-3 text-center"><div class="flex items-center justify-center gap-1 font-bold text-blue-700 text-xs md:text-sm"><input type="number" value="${length || 0}" min="0" oninput="calculateRailRow(this)" class="rail-length-input w-24 px-2 py-1 border rounded font-mono text-center"> mm</div></td>
+                <td class="px-4 py-3 rail-qty font-semibold text-center">0</td>
+                <td class="px-4 py-3 mid-clamp-val border-l border-gray-50 text-center">0</td>
+                <td class="px-4 py-3 end-clamp-val text-center">0</td>
+                <td class="px-4 py-3 h-base-val font-bold text-blue-600 border-l border-gray-200 text-xs text-center font-bold">0</td>
+                <td class="px-4 py-3 elevated-val font-bold text-blue-600 text-xs text-center font-bold">0</td>
+                <td class="px-4 py-3 piece-qty-val font-bold text-blue-600 text-xs text-center font-bold">0</td>
+                <td class="px-4 py-3 no-print text-center"><button onclick="this.closest('tr').remove(); updateSummary();" class="text-red-300 hover:text-red-500 font-bold text-lg">×</button></td>
+            `;
+            tbody.appendChild(tr);
+            if (!length) tr.querySelector('.rail-length-input').value = railLengthMap[rows] || (rows * 1000 + 300);
+            calculateRailRow(tr.querySelector('.row-input'));
+        }
+
+        function handleRailRowChange(input) {
+            const tr = input.closest('tr');
+            const rows = parseInt(input.value) || 0;
+            tr.querySelector('.rail-length-input').value = railLengthMap[rows] || (rows * 1000 + 300);
+            calculateRailRow(input);
+        }
+
+        function calculateRailRow(el) {
+            const tr = el.closest('tr');
+            const rows = parseInt(tr.querySelector('.row-input').value) || 0;
+            const groups = parseInt(tr.querySelector('.group-input').value) || 0;
+            const length = parseFloat(tr.querySelector('.rail-length-input').value) || 0;
+            const multiplier = (parseInt(document.getElementById('supportPoints').value) === 6) ? 3 : 2;
+            const spacing = parseFloat(document.getElementById('cSteelSpacing').value) || 1000;
+            const hasPiece = document.getElementById('pieceSpec').value !== "不需架高片";
+
+            const railQty = groups * multiplier;
+            const midClamps = (rows > 1) ? (rows - 1) * multiplier * groups : 0;
+            const endClamps = 2 * multiplier * groups;
+            const pointsPerRail = Math.ceil(length / spacing) + 1;
+            const totalSupports = pointsPerRail * multiplier * groups;
+
+            tr.querySelector('.rail-qty').textContent = railQty;
+            tr.querySelector('.mid-clamp-val').textContent = midClamps;
+            tr.querySelector('.end-clamp-val').textContent = endClamps;
+            tr.querySelector('.h-base-val').textContent = totalSupports;
+            tr.querySelector('.elevated-val').textContent = totalSupports;
+            tr.querySelector('.piece-qty-val').textContent = hasPiece ? totalSupports : 0;
+            updateSummary();
+        }
+
+        function addLifelinePair(len = 2480, desc = "走道區段") {
+            const id = Date.now() + Math.random();
+            addLifelineRow(len, '平行於中脊', id);
+            addWalkwayStructureRow(`${desc}`, len, '平行於中脊', id);
+            updateSummary();
+        }
+
+        function addLifelineRow(len = 2480, type = '平行於中脊', id = null) {
+            const tbody = document.getElementById('lifelineBody');
+            const tr = document.createElement('tr');
+            tr.dataset.syncId = id;
+            tr.className = "border-b border-gray-50 text-sm font-bold text-center";
+            tr.innerHTML = `
+                <td class="px-4 py-3 text-left"><input type="number" value="${len}" oninput="syncToStructure(this)" class="line-len w-24 px-2 py-1 border rounded font-mono text-center outline-blue-500"></td>
+                <td class="px-4 py-3"><select onchange="syncToStructure(this)" class="line-type px-2 py-1 border rounded text-xs text-center font-bold"><option value="平行於中脊" ${type==='平行於中脊'?'selected':''}>平行於中脊</option><option value="垂直於中脊" ${type==='垂直於中脊'?'selected':''}>垂直於中脊</option><option value="中脊" ${type==='中脊'?'selected':''}>中脊</option></select></td>
+                <td class="px-4 py-3 res-len font-bold text-blue-700 font-mono">0</td>
+                <td class="px-4 py-3"><input type="number" value="1" readonly class="res-tensioner w-12 text-center bg-gray-50 text-gray-400 border-none outline-none font-bold"></td>
+                <td class="px-4 py-3 res-clip font-mono text-blue-600 font-bold">0</td>
+                <td class="px-4 py-3 res-cap font-mono text-blue-600 font-bold">0</td>
+                <td class="px-4 py-3 no-print text-center"><button onclick="removePair('${id}')" class="text-red-300 hover:text-red-500 font-bold text-lg">×</button></td>
+            `;
+            tbody.appendChild(tr);
+            calculateLifeline(tr.querySelector('.line-len'));
+        }
+
+        function syncToStructure(el) {
+            const tr = el.closest('tr');
+            const length = tr.querySelector('.line-len').value;
+            const type = tr.querySelector('.line-type').value;
+            const structRow = document.querySelector(`#walkwayStructureBody tr[data-sync-id="${tr.dataset.syncId}"]`);
+            if (structRow) {
+                const distInput = structRow.querySelector('.walk-dist');
+                const typeSelect = structRow.querySelector('.walk-type');
+                distInput.value = length; typeSelect.value = type;
+                calculateWalkway(distInput);
+            }
+            calculateLifeline(tr.querySelector('.line-len'));
+        }
+
+        function calculateLifeline(el) {
+            const tr = el.closest('tr');
+            const lengthCm = parseFloat(tr.querySelector('.line-len').value) || 0;
+            const mLength = Math.ceil(lengthCm / 100) + 1;
+            const caps = Math.ceil(mLength / 3);
+            const clips = 8 + caps;
+            tr.querySelector('.res-len').textContent = mLength;
+            tr.querySelector('.res-clip').textContent = clips;
+            tr.querySelector('.res-cap').textContent = caps;
+            updateSummary();
+        }
+
+        function addWalkwayStructureRow(desc = "走道區段", dist = 4714, type = "平行於中脊", id = null) {
+            const tbody = document.getElementById('walkwayStructureBody');
+            const tr = document.createElement('tr');
+            tr.dataset.syncId = id;
+            tr.className = "border-b border-gray-50 text-sm text-center font-bold";
+            tr.innerHTML = `
+                <td class="px-4 py-3 text-left"><input type="text" value="${desc}" class="w-full px-2 py-1 border rounded text-xs font-bold text-gray-600 text-center"></td>
+                <td class="px-4 py-3"><div class="flex items-center justify-center gap-1 bg-gray-50 px-2 py-1 border rounded text-gray-500 font-mono text-center"><input type="number" value="${dist}" class="walk-dist w-20 bg-transparent text-center outline-none border-none text-sm" readonly></div></td>
+                <td class="px-4 py-3"><select class="walk-type bg-transparent pointer-events-none appearance-none border-none text-center w-full font-bold" tabindex="-1"><option value="平行於中脊" ${type==='平行於中脊'?'selected':''}>平行於中脊</option><option value="垂直於中脊" ${type==='垂直於中脊'?'selected':''}>垂直於中脊</option><option value="中脊" ${type==='中脊'?'selected':''}>中脊</option></select></td>
+                <td class="px-4 py-3 res-hbase text-green-800 text-sm font-bold">0</td>
+                <td class="px-4 py-3 res-mesh text-green-700 text-sm font-bold">0</td>
+                <td class="px-4 py-3 res-angle text-blue-600 text-sm font-bold">0</td>
+                <td class="px-4 py-3 res-washer text-orange-700 text-sm font-bold">0</td>
+                <td class="px-4 py-3 no-print text-center"><button onclick="removePair('${id}')" class="text-red-300 hover:text-red-500 font-bold text-lg">×</button></td>
+            `;
+            tbody.appendChild(tr);
+            calculateWalkway(tr.querySelector('.walk-dist'));
+        }
+
+        function calculateWalkway(el) {
+            const tr = el.closest('tr');
+            const dist = parseFloat(tr.querySelector('.walk-dist').value) || 0;
+            const type = tr.querySelector('.walk-type').value;
+            let hbase = 0, mesh = 0, angle = 0, washer = 0;
+            if (dist > 0) {
+                mesh = Math.ceil(dist / 240);
+                if (type === "平行於中脊" || type === "中脊") {
+                    hbase = Math.ceil(dist / 90) * 2;
+                    angle = Math.ceil((dist / 290 * 2) + ((dist / 90) * 70 / 300));
+                } else {
+                    hbase = Math.ceil(dist / 600) * 16;
+                    angle = Math.ceil(dist / 290 * 2);
+                }
+                washer = mesh * 8;
+            }
+            tr.querySelector('.res-hbase').textContent = hbase;
+            tr.querySelector('.res-mesh').textContent = mesh;
+            tr.querySelector('.res-angle').textContent = angle;
+            tr.querySelector('.res-washer').textContent = washer;
+            updateSummary();
+        }
+
+        function removePair(id) {
+            document.querySelectorAll(`tr[data-sync-id="${id}"]`).forEach(tr => tr.remove());
+            updateSummary();
+        }
+
+        function recalculateAll() {
+            document.querySelectorAll('#calcBody tr').forEach(tr => calculateRailRow(tr.querySelector('.row-input')));
+            document.querySelectorAll('#lifelineBody tr').forEach(tr => calculateLifeline(tr.querySelector('.line-len')));
+            document.querySelectorAll('#walkwayStructureBody tr').forEach(tr => calculateWalkway(tr.querySelector('.walk-dist')));
+        }
+
+        // --- Advanced Summary Logic ---
+        function updateSummary() {
+            const mainGrid = document.getElementById('mainSummaryGrid');
+            const screwGrid = document.getElementById('screwSummaryGrid');
+            const mMain = document.getElementById('masterMainGrid');
+            const mHard = document.getElementById('masterHardwareGrid');
+            if (!mainGrid) return;
+
+            mainGrid.innerHTML = ''; screwGrid.innerHTML = '';
+            mMain.innerHTML = ''; mHard.innerHTML = '';
+
+            document.getElementById('summaryProjectName').textContent = document.getElementById('projectName').value || "未命名案場";
+            document.getElementById('summaryProjectCode').textContent = document.getElementById('projectCode').value || "NO-CODE";
+
+            // Aggregation Data
+            let rails = { hbase: 0, mid: 0, end: 0, elevated: 0, pieces: 0, lengths: {} };
+            document.querySelectorAll('#calcBody tr').forEach(tr => {
+                const len = tr.querySelector('.rail-length-input').value;
+                const qty = parseInt(tr.querySelector('.rail-qty').textContent) || 0;
+                if (qty > 0) rails.lengths[`${len}mm`] = (rails.lengths[`${len}mm`] || 0) + qty;
+                rails.mid += parseInt(tr.querySelector('.mid-clamp-val').textContent) || 0;
+                rails.end += parseInt(tr.querySelector('.end-clamp-val').textContent) || 0;
+                rails.hbase += parseInt(tr.querySelector('.h-base-val').textContent) || 0;
+                rails.elevated += parseInt(tr.querySelector('.elevated-val').textContent) || 0;
+                rails.pieces += parseInt(tr.querySelector('.piece-qty-val').textContent) || 0;
+            });
+
+            let walk = { hbase: 0, line: 0, tensioner: 0, clip: 0, cap: 0, mesh: 0, angle: 0, washer: 0 };
+            document.querySelectorAll('#lifelineBody tr').forEach(tr => {
+                walk.line += parseInt(tr.querySelector('.res-len').textContent) || 0;
+                walk.tensioner += parseInt(tr.querySelector('.res-tensioner').value) || 0;
+                walk.clip += parseInt(tr.querySelector('.res-clip').textContent) || 0;
+                walk.cap += parseInt(tr.querySelector('.res-cap').textContent) || 0;
+            });
+            document.querySelectorAll('#walkwayStructureBody tr').forEach(tr => {
+                walk.hbase += parseInt(tr.querySelector('.res-hbase').textContent) || 0;
+                walk.mesh += parseInt(tr.querySelector('.res-mesh').textContent) || 0;
+                walk.angle += parseInt(tr.querySelector('.res-angle').textContent) || 0;
+                walk.washer += parseInt(tr.querySelector('.res-washer').textContent) || 0;
+            });
+
+            const rM825 = (rails.hbase * 2) + rails.mid + rails.end + (rails.pieces * 3);
+            const wM825 = (walk.angle * 2) + (walk.cap * 1) + (walk.hbase * 2);
+            const wM830 = walk.washer;
+            const hBaseSpec = document.getElementById('hBaseSpec').value;
+            const pieceSpec = document.getElementById('pieceSpec').value;
+
+            // RENDERING: Rails Tab
+            if (activeTab === 'rails') {
+                Object.keys(rails.lengths).sort().forEach(l => createListItem(mainGrid, `鋁條 (${l})`, rails.lengths[l], '支', 'bg-blue-50 border-blue-100 font-bold'));
+                if (rails.mid > 0) createListItem(mainGrid, '中壓夾具', rails.mid, '個');
+                if (rails.end > 0) createListItem(mainGrid, '邊壓夾具', rails.end, '個');
+                if (rails.hbase > 0) createListItem(mainGrid, `H座 (${hBaseSpec})`, rails.hbase, '組', 'bg-green-50 border-green-100 font-bold');
+                if (rails.elevated > 0) createListItem(mainGrid, '30CM 架高鋁條', rails.elevated, '支');
+                if (rails.pieces > 0) createListItem(mainGrid, `架高片 (${pieceSpec})`, rails.pieces, '個', 'bg-indigo-50 font-bold');
+                if (rM825 > 0) {
+                    createListItem(screwGrid, 'M825 螺絲組', rM825, '組', 'bg-orange-50 font-bold');
+                    createListItem(screwGrid, 'M825 凸緣螺帽', rM825, '個');
+                    createListItem(screwGrid, '尼龍螺帽', (rails.mid + rails.end), '個');
+                    createListItem(screwGrid, '自功釘', rails.hbase, '個');
+                    createListItem(screwGrid, '鐵氟龍墊片', rM825 * 2, '個');
+                }
+            } 
+            // RENDERING: Walkway Tab
+            else if (activeTab === 'walkway') {
+                if (walk.line > 0) createListItem(mainGrid, '不鏽鋼母索', walk.line, '米', 'bg-blue-50 border-blue-100 font-bold');
+                if (walk.mesh > 0) createListItem(mainGrid, '菱形網', walk.mesh, '片', 'bg-green-50 font-bold');
+                if (walk.angle > 0) createListItem(mainGrid, '角鐵', walk.angle, '支', 'bg-blue-50 border-blue-100 font-bold');
+                if (walk.hbase > 0) createListItem(mainGrid, '走道 H座', walk.hbase, '組', 'bg-green-50 font-bold');
+                if (walk.tensioner > 0) createListItem(screwGrid, '地牛(破緊器)', walk.tensioner, '個', 'bg-blue-50 font-bold');
+                if (walk.cap > 0) createListItem(screwGrid, '母索吊帽', walk.cap, '個', 'bg-blue-50 font-bold');
+                if (walk.clip > 0) createListItem(screwGrid, '鋼索夾', walk.clip, '個', 'bg-blue-50 font-bold');
+                if (walk.washer > 0) createListItem(screwGrid, '型鋼華司', walk.washer, '個', 'bg-orange-50 font-bold');
+                if (wM825 > 0) {
+                    createListItem(screwGrid, 'M825 螺絲組', wM825, '組', 'bg-orange-50 font-bold text-orange-900');
+                    createListItem(screwGrid, 'M825 凸緣螺帽', wM825, '個');
+                }
+                if (wM830 > 0) {
+                    createListItem(screwGrid, 'M830 螺絲組', wM830, '組', 'bg-orange-50 font-bold text-orange-900');
+                    createListItem(screwGrid, 'M830 凸緣螺帽', wM830, '個');
+                }
+                if (walk.hbase > 0) createListItem(screwGrid, '自功釘', walk.hbase, '個');
+            }
+            // RENDERING: Master Summary
+            else if (activeTab === 'summary') {
+                // Main Parts
+                Object.keys(rails.lengths).forEach(l => createListItem(mMain, `鋁條 (${l})`, rails.lengths[l], '支', 'bg-blue-50 border-blue-200 font-bold'));
+                if (rails.mid > 0) createListItem(mMain, '中壓夾具', rails.mid, '個');
+                if (rails.end > 0) createListItem(mMain, '邊壓夾具', rails.end, '個');
+                if (walk.mesh > 0) createListItem(mMain, '維修走道 菱形網', walk.mesh, '片', 'bg-green-50 font-bold');
+                if (walk.angle > 0) createListItem(mMain, '維修走道 角鐵', walk.angle, '支', 'bg-blue-50 font-bold');
+                const totalH = rails.hbase + walk.hbase;
+                if (totalH > 0) createListItem(mMain, `H座 (${hBaseSpec})`, totalH, '組', 'bg-green-50 font-bold');
+                if (rails.elevated > 0) createListItem(mMain, '30CM 架高鋁條', rails.elevated, '支');
+                if (rails.pieces > 0) createListItem(mMain, `架高片 (${pieceSpec})`, rails.pieces, '個', 'bg-indigo-50 font-bold');
+
+                // Hardware
+                if (walk.line > 0) createListItem(mHard, '不鏽鋼母索', walk.line, '米', 'bg-blue-50 font-bold');
+                if (walk.tensioner > 0) createListItem(mHard, '地牛(破緊器)', walk.tensioner, '個');
+                if (walk.cap > 0) createListItem(mHard, '母索吊帽', walk.cap, '個');
+                if (walk.clip > 0) createListItem(mHard, '鋼索夾', walk.clip, '個');
+                if (walk.washer > 0) createListItem(mHard, '型鋼華司', walk.washer, '個', 'bg-orange-50 font-bold');
+                const tM825 = rM825 + wM825;
+                if (tM825 > 0) {
+                    createListItem(mHard, 'M825 螺絲組', tM825, '組', 'bg-orange-50 font-bold');
+                    createListItem(mHard, 'M825 凸緣螺帽', tM825, '個');
+                }
+                if (wM830 > 0) {
+                    createListItem(mHard, 'M830 螺絲組', wM830, '組', 'bg-orange-50 font-bold');
+                    createListItem(mHard, 'M830 凸緣螺帽', wM830, '個');
+                }
+                if (rails.mid + rails.end > 0) createListItem(mHard, '夾具 尼龍螺帽', (rails.mid + rails.end), '個');
+                const tSelf = rails.hbase + walk.hbase;
+                if (tSelf > 0) createListItem(mHard, '自功釘', tSelf, '個');
+                if (rM825 > 0) createListItem(mHard, '鋁條 鐵氟龍墊片', rM825 * 2, '個');
+            }
+        }
+
+        function createListItem(container, label, value, unit, cls = 'bg-gray-50 border-gray-100') {
+            const div = document.createElement('div');
+            div.className = `${cls} p-3 px-5 rounded-lg border flex items-center justify-between mb-1 hover:bg-white transition-colors`;
+            div.innerHTML = `<span class="text-xs lg:text-sm font-bold text-gray-700">${label}</span><span class="text-sm lg:text-lg font-bold text-blue-900 font-mono">${value} <span class="text-[10px] font-normal text-gray-500 uppercase">${unit}</span></span>`;
+            container.appendChild(div);
+        }
+
+        // --- Cloud Save ---
+        async function saveProjectToCloud() {
+            if (!window.currentUser) return alert("請等待連線...");
+            const name = document.getElementById('saveNameInput').value.trim();
+            if (!name) return alert("輸入儲存名稱");
+            const { db, appId, currentUser, firestoreUtils } = window;
+            const projectData = {
+                metadata: {
+                    name, projectName: document.getElementById('projectName').value,
+                    buildingName: document.getElementById('buildingName').value,
+                    projectCode: document.getElementById('projectCode').value,
+                    supportPoints: document.getElementById('supportPoints').value,
+                    cSteelSpacing: document.getElementById('cSteelSpacing').value,
+                    hBaseSpec: document.getElementById('hBaseSpec').value,
+                    pieceSpec: document.getElementById('pieceSpec').value,
+                    note: document.getElementById('projectNote').value,
+                    timestamp: Date.now()
+                },
+                rails: Array.from(document.querySelectorAll('#calcBody tr')).map(tr => ({
+                    rows: tr.querySelector('.row-input').value, groups: tr.querySelector('.group-input').value, length: tr.querySelector('.rail-length-input').value
+                })),
+                walkway: Array.from(document.querySelectorAll('#lifelineBody tr')).map(tr => ({
+                    length: tr.querySelector('.line-len').value, type: tr.querySelector('.line-type').value, syncId: tr.dataset.syncId
+                })),
+                walkwayPositions: Array.from(document.querySelectorAll('#walkwayStructureBody tr')).map(tr => ({
+                    desc: tr.querySelector('input').value, syncId: tr.dataset.syncId
+                }))
+            };
+            try {
+                await firestoreUtils.addDoc(firestoreUtils.collection(db, 'artifacts', appId, 'users', currentUser.uid, 'projects'), projectData);
+                alert("儲存完成"); document.getElementById('saveNameInput').value = ""; loadProjectList();
+            } catch (err) { alert("錯誤: " + err.message); }
+        }
+
+        async function loadProjectList() {
+            const { db, appId, currentUser, firestoreUtils } = window;
+            if (!currentUser) return;
+            const container = document.getElementById('cloudProjectList');
+            container.innerHTML = '讀取中...';
+            const snapshot = await firestoreUtils.getDocs(firestoreUtils.collection(db, 'artifacts', appId, 'users', currentUser.uid, 'projects'));
+            container.innerHTML = "";
+            snapshot.forEach(docSnap => {
+                const data = docSnap.data();
+                const item = document.createElement('div');
+                item.className = "flex justify-between p-4 border rounded mb-2 hover:bg-blue-50 cursor-pointer font-bold";
+                item.innerHTML = `<div class="flex-1" onclick='loadProject("${docSnap.id}")'>${data.metadata.name}<br><small class="text-gray-400 font-normal">${new Date(data.metadata.timestamp).toLocaleDateString()}</small></div>
+                <button onclick='deleteProject("${docSnap.id}")' class="text-red-400 p-2"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg></button>`;
+                container.appendChild(item);
+            });
+        }
+
+        window.loadProject = async (docId) => {
+            const { db, appId, currentUser, firestoreUtils } = window;
+            const snap = await firestoreUtils.getDoc(firestoreUtils.doc(db, 'artifacts', appId, 'users', currentUser.uid, 'projects', docId));
+            if (!snap.exists()) return;
+            const data = snap.data();
+            document.getElementById('projectName').value = data.metadata.projectName || "";
+            document.getElementById('buildingName').value = data.metadata.buildingName || "";
+            document.getElementById('projectCode').value = data.metadata.projectCode || "";
+            document.getElementById('cSteelSpacing').value = data.metadata.cSteelSpacing || 1000;
+            document.getElementById('calcBody').innerHTML = "";
+            data.rails.forEach(r => addRow(r.rows, r.groups, r.length));
+            document.getElementById('lifelineBody').innerHTML = "";
+            document.getElementById('walkwayStructureBody').innerHTML = "";
+            data.walkway.forEach((w, i) => {
+                const pos = data.walkwayPositions[i] || { desc: "走道", syncId: w.syncId };
+                addLifelineRow(w.length, w.type, w.syncId);
+                addWalkwayStructureRow(pos.desc, w.length, w.type, w.syncId);
+            });
+            toggleCloudModal(); updateSummary();
+        };
+
+        window.deleteProject = async (id) => { if (confirm("刪除？")) {
+            await firestoreUtils.deleteDoc(firestoreUtils.doc(window.db, 'artifacts', window.appId, 'users', window.currentUser.uid, 'projects', id));
+            loadProjectList();
+        }};
+
+        function toggleCloudModal() {
+            const modal = document.getElementById('cloudModal');
+            modal.classList.toggle('hidden');
+            if (!modal.classList.contains('hidden')) loadProjectList();
+        }
+
+        function resetData() {
+            if(confirm('確定要清除所有數據？')) {
+                document.getElementById('calcBody').innerHTML = '';
+                document.getElementById('lifelineBody').innerHTML = '';
+                document.getElementById('walkwayStructureBody').innerHTML = '';
+                addRow(1, 2); addLifelinePair(2480, "走道1"); updateSummary();
+            }
+        }
+
+        window.onload = () => {
+            addRow(1, 2); addRow(2, 8); addLifelinePair(2480, "走道1"); updateSummary();
+        };
+    </script>
+</body>
+</html>
